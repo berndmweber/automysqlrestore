@@ -1,0 +1,84 @@
+#!/bin/bash
+name="Restore DB"
+information="Restores databases from automysqlbackup databases dumps"
+version="1.0.1"
+
+backupdir="/var/spool/mysql-backups"
+
+day="Thursday"
+date="2012-08-30"
+time="07h00m"
+
+function timer()
+{
+  if [[ $# -eq 0 ]]; then
+    echo $(date '+%s')
+  else
+    local  stime=$1
+    etime=$(date '+%s')
+
+    if [[ -z "$stime" ]]; then stime=$etime; fi
+
+    dt=$((etime - stime))
+    ds=$((dt % 60))
+    dm=$(((dt / 60) % 60))
+    dh=$((dt / 3600))
+    printf '%d:%02d:%02d' $dh $dm $ds
+  fi
+}
+
+global_time=$(timer)
+
+if [ "--help" == "${1}" ]; then
+  echo "Usage: ${0}            Extracts fullschema then all databases from the defined daily drop.";
+  echo "       ${0} --purge    Will also first delete all existing databases. WARNING: Not recoverable!";
+  echo "       ${0} --help     This usage information.";
+  echo "       ${0} --version  The version number of this script";
+  exit 0;
+fi
+if [ "--version" == "${1}" ]; then
+  echo "${name} - ${version}";
+  exit 0;
+fi
+if [ "--purge" == "${1}" ]; then
+  echo "Purging...";
+  t=$(timer);
+  for d in `mysql -u root -p<mysql_root_pw> -e "show databases" | grep -v Database | grep -v mysql | grep -v information_schema | grep -v test | grep -v OLD`; do
+    echo "Dropping ${d}...";
+    echo ${d} | gawk '{print "drop database `" $1 "`;select sleep(0.1);"}' | mysql -uroot -p<mysql_root_pw>;
+  done;
+  printf "Done - %s\n " "$(timer $t)";
+fi
+
+pushd $backupdir
+
+echo "Using: ${date} - ${time} - ${day}"
+echo
+echo "Processing fullschema:"
+t=$(timer)
+cd fullschema
+bunzip2 -v fullschema_daily_${date}_${time}_${day}.sql.bz2 2>/dev/null
+echo "Importing fullschema into mysql";
+mysql -h localhost -u root -p<mysql_root_pw> < fullschema_daily_${date}_${time}_${day}.sql
+echo "Done importing fullschema. Recompressing...";
+bzip2 -v fullschema_daily_${date}_${time}_${day}.sql
+cd ..;
+printf "Done with fullschema - %s\n" "$(timer $t)";
+
+for f in `ls daily/`; do
+  echo "Processing ${f}:";
+  t=$(timer);
+  cd daily/${f};
+  bunzip2 -v daily_${f}_${date}_${time}_${day}.sql.bz2 2>/dev/null;
+  echo "Importing ${f} into mysql";
+  mysqladmin -h localhost -u root -p<mysql_root_pw> create ${f} 2>/dev/null;
+  mysql -h localhost -u root -p<mysql_root_pw> ${f} < daily_${f}_${date}_${time}_${day}.sql;
+  echo "Done importing ${f}. Recompressing...";
+  bzip2 -v daily_${f}_${date}_${time}_${day}.sql;
+  cd ../..;
+  printf "Done with %s - %s\n" "${f}" "$(timer $t)";
+done
+
+popd
+
+printf "Done - %s\n" "$(timer $global_time)";
